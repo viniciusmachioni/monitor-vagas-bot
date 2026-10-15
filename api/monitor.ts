@@ -132,13 +132,26 @@ async function enviarTelegram(mensagem: string): Promise<void> {
   const chatId = process.env.TELEGRAM_CHAT_ID;
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: mensagem,
-      parse_mode: 'Markdown'
-    })
-  });
+  const enviar = (parseMode?: string) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: mensagem,
+        ...(parseMode ? { parse_mode: parseMode } : {})
+      })
+    });
+
+  let response = await enviar('Markdown');
+
+  // Markdown inválido (ex.: "_" ou "*" não fechado) faz o Telegram rejeitar a
+  // mensagem com 400; reenvia como texto puro para o aviso sempre chegar
+  if (!response.ok) {
+    response = await enviar();
+  }
+
+  if (!response.ok) {
+    console.error('Falha ao enviar mensagem no Telegram:', await response.text());
+  }
 }
