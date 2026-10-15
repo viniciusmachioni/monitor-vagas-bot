@@ -73,8 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 
 async function analisarComGemini(textoEmails: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-  
   // 3. Prompt aprimorado focando na estrutura e na "malícia" para identificar recusas
   const prompt = `
     Atue como um assistente de triagem de e-mails de recrutamento. Analise a seguinte lista de e-mails recebidos.
@@ -99,16 +97,34 @@ async function analisarComGemini(textoEmails: string): Promise<string> {
     ${textoEmails}
   `;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }]
-    })
-  });
+  // Tenta cada modelo até 2 vezes: 503/429 são comuns por alta demanda e costumam passar logo
+  const modelos = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  let ultimoErro = '';
 
-  const json: any = await response.json();
-  return json.candidates?.[0]?.content?.parts?.[0]?.text || 'Não foi possível gerar o resumo com a IA.';
+  for (const modelo of modelos) {
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      });
+
+      const json: any = await response.json();
+      const parts: any[] = json.candidates?.[0]?.content?.parts || [];
+      const texto = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
+
+      if (response.ok && texto) return texto;
+
+      ultimoErro = `${modelo} HTTP ${response.status} ${json.error?.message || json.candidates?.[0]?.finishReason || json.promptFeedback?.blockReason || 'resposta sem texto'}`;
+      console.error(`Gemini falhou (tentativa ${tentativa}):`, ultimoErro);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  return `Não foi possível gerar o resumo com a IA. (${ultimoErro})`;
 }
 
 async function enviarTelegram(mensagem: string): Promise<void> {
